@@ -1,1 +1,2 @@
-web::gunicorn WeatherNowAPI:app
+gunicorn WeatherNowAPI:app
+
