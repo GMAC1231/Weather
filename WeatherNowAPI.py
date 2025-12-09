@@ -1,58 +1,43 @@
-import redis
-import json
 from flask import Flask, request, jsonify
-import aiohttp
-import asyncio
+import requests
 
 app = Flask(__name__)
 
-# Connect to Redis
-cache = redis.StrictRedis(host='localhost', port=6379, db=0)
-
+# ✅ Your OpenWeatherMap API key
 API_KEY = "b3346d809378536ca9766fd661b3bc06"
 
-# Async function to fetch weather data
-async def fetch_weather_data(city):
-    url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            return await response.json()
 
-# ✅ Single City Weather (with caching)
+# 🌤 Single City Weather
 @app.route("/weather", methods=["GET"])
-async def get_weather():
+def get_weather():
     city = request.args.get("city")
     if not city:
         return jsonify({"error": "City name is required"}), 400
 
-    # Check if the data is already cached
-    cached_data = cache.get(city)
-    if cached_data:
-        return jsonify(json.loads(cached_data))
+    try:
+        # Use HTTPS for secure connection
+        url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
+        response = requests.get(url, timeout=10)
+        data = response.json()
 
-    # Fetch data from OpenWeather if not cached
-    data = await fetch_weather_data(city)
+        if data.get("cod") == 200:
+            return jsonify({
+                "city": city,
+                "temperature": data["main"]["temp"],
+                "humidity": data["main"]["humidity"],
+                "condition": data["weather"][0]["main"]
+            })
+        else:
+            return jsonify({"error": data.get("message", "City not found")}), 404
 
-    if data.get("cod") == 200:
-        # Cache the result for 5 minutes (300 seconds)
-        cache.setex(city, 300, json.dumps({
-            "city": city,
-            "temperature": data["main"]["temp"],
-            "humidity": data["main"]["humidity"],
-            "condition": data["weather"][0]["main"]
-        }))
-        return jsonify({
-            "city": city,
-            "temperature": data["main"]["temp"],
-            "humidity": data["main"]["humidity"],
-            "condition": data["weather"][0]["main"]
-        })
-    else:
-        return jsonify({"error": data.get("message", "City not found")}), 404
+    except requests.exceptions.RequestException as e:
+        return jsonify({"error": f"Network error: {str(e)}"}), 500
 
-# ✅ Multiple Cities Weather
+
+# 🌍 Multiple Cities Weather
 @app.route("/weather/cities", methods=["GET"])
-async def get_multiple_cities_weather():
+def get_multiple_cities_weather():
+    # Example: /weather/cities?names=Muscat,Doha,Karachi
     city_names = request.args.get("names")
     if not city_names:
         return jsonify({"error": "Please provide city names like ?names=Muscat,Doha"}), 400
@@ -60,23 +45,40 @@ async def get_multiple_cities_weather():
     cities = [name.strip() for name in city_names.split(",")]
     results = []
 
-    # Run all the city fetch tasks concurrently
-    tasks = [fetch_weather_data(city) for city in cities]
-    responses = await asyncio.gather(*tasks)
+    for city in cities:
+        try:
+            url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
+            response = requests.get(url, timeout=10)
+            data = response.json()
 
-    for city, data in zip(cities, responses):
-        if data.get("cod") == 200:
-            results.append({
-                "city": city,
-                "temperature": data["main"]["temp"],
-                "humidity": data["main"]["humidity"],
-                "condition": data["weather"][0]["main"]
-            })
-        else:
-            results.append({"city": city, "error": data.get("message", "Not found")})
+            if data.get("cod") == 200:
+                results.append({
+                    "city": city,
+                    "temperature": data["main"]["temp"],
+                    "humidity": data["main"]["humidity"],
+                    "condition": data["weather"][0]["main"]
+                })
+            else:
+                results.append({"city": city, "error": data.get("message", "City not found")})
+
+        except requests.exceptions.RequestException as e:
+            results.append({"city": city, "error": f"Network error: {str(e)}"})
 
     return jsonify(results)
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
 
+# 🏠 Home route (for testing on Render)
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({
+        "message": "🌦 WeatherNow API is running successfully!",
+        "endpoints": {
+            "/weather?city=Muscat": "Get weather for a single city",
+            "/weather/cities?names=Muscat,Doha,Karachi": "Get weather for multiple cities"
+        }
+    })
+
+
+if __name__ == "__main__":
+    # ⚙️ Run on 0.0.0.0 for Render / localhost access
+    app.run(host="0.0.0.0", port=5000)
